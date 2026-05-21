@@ -71,32 +71,44 @@ password = password_anda
 
 ## Penggunaan
 
-### Semua produk eligible
+### Isi modal/cost dari kode_modal
+
 ```bash
+# Semua produk eligible
 python3 main.py
-```
 
-### Preview tanpa menulis ke Odoo (dry-run)
-```bash
+# Preview tanpa menulis ke Odoo (dry-run)
 python3 main.py --dry-run
-```
 
-### Filter nama produk (substring, tidak case-sensitive)
-```bash
+# Filter nama produk (substring, tidak case-sensitive)
 python3 main.py --product "Sepatu"
 python3 main.py --product "sepatu nike" --dry-run
-```
 
-### Filter by ID produk
-```bash
+# Filter by ID produk
 python3 main.py --id 42
 python3 main.py --id 42 55 78 --dry-run
+```
+
+### Cek produk dengan harga kosong
+
+Menampilkan produk yang **harga modal** (`standard_price`) dan **harga jual** (`list_price`) keduanya kosong (= 0). Tidak ada yang diubah.
+
+```bash
+# Semua produk
+python3 main.py --check
+
+# Dengan filter nama
+python3 main.py --check --product "Sepatu"
+
+# Dengan filter ID
+python3 main.py --check --id 42 55
 ```
 
 ---
 
 ## Contoh Output Terminal
 
+**Mode isi modal/cost (`--dry-run`)**
 ```
 ========================================================================
     KODE MODAL DECODER  |  Chipper ABCDEFGHIY  [DRY-RUN]
@@ -116,7 +128,7 @@ python3 main.py --id 42 55 78 --dry-run
   No   Nama Produk                          Kode Modal     Modal/Cost
   ····································································
   1    Sepatu Nike Air Max                  BEY RT         Rp 25.000
-  2    Kemeja Flannel Kotak                 AEYY RB        Rp 1.500.000
+  2    Kemeja Flannel Kotak (2 varian)      AEYY RB        Rp 1.500.000
   3    Celana Cargo Panjang                 AB RB          Rp 12.000
   ────────────────────────────────────────────────────────────────────
 
@@ -126,13 +138,39 @@ python3 main.py --id 42 55 78 --dry-run
   Log disimpan: logs/20260521_100000.csv
 ```
 
+**Mode cek harga kosong (`--check`)**
+```
+========================================================================
+    KODE MODAL DECODER  |  Cek Harga Kosong
+========================================================================
+
+  Mencari produk dengan harga modal & harga jual kosong...
+
+  ────────────────────────────────────────────────────────────────────
+  PRODUK HARGA KOSONG (3 produk):
+  ────────────────────────────────────────────────────────────────────
+  No   ID     Nama Produk                          Kode Modal     Modal     Jual
+  ··············································································
+  1    42     Sepatu Nike Air Max                  BEY RT         Rp 0      Rp 0
+  2    55     Kemeja Flannel                       -              Rp 0      Rp 0
+  3    78     Celana Cargo                         AB RB          Rp 0      Rp 0
+  ────────────────────────────────────────────────────────────────────
+
+  Log disimpan: logs/20260521_100000_check.csv
+```
+
 ---
 
 ## Log CSV
 
-Setiap run otomatis menyimpan log ke `logs/YYYYMMDD_HHMMSS.csv`.
+Setiap run otomatis menyimpan log ke folder `logs/`.
 
-Kolom yang tersedia:
+| Nama file | Kapan dibuat |
+|---|---|
+| `logs/YYYYMMDD_HHMMSS.csv` | Setiap run isi modal/cost |
+| `logs/YYYYMMDD_HHMMSS_check.csv` | Setiap run `--check` |
+
+**Kolom log isi modal/cost:**
 
 | Kolom | Keterangan |
 |---|---|
@@ -144,6 +182,17 @@ Kolom yang tersedia:
 | `modal_baru` | Hasil decode (kosong jika dilewati) |
 | `status` | `OK` / `GAGAL` / `DRY-RUN` / `DILEWATI` |
 | `catatan` | Alasan skip atau pesan error |
+
+**Kolom log cek harga kosong:**
+
+| Kolom | Keterangan |
+|---|---|
+| `waktu` | Timestamp run |
+| `id_produk` | ID `product.template` di Odoo |
+| `nama_produk` | Nama produk |
+| `kode_modal` | Isi kode modal (`-` jika kosong) |
+| `harga_modal` | Nilai `standard_price` |
+| `harga_jual` | Nilai `list_price` |
 
 Folder `logs/` tidak ikut ke repository (sudah masuk `.gitignore`).
 
