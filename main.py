@@ -9,8 +9,7 @@ Penggunaan:
   python3 main.py --dry-run             # preview saja, tidak ditulis
   python3 main.py --product "Nama"      # filter nama (substring, case-insensitive)
   python3 main.py --id 42 55 78         # filter by ID produk (bisa lebih dari satu)
-  python3 main.py --check               # cek produk dengan harga modal & jual = 0
-  python3 main.py --check --value 1     # cek produk dengan harga modal & jual = 1
+  python3 main.py --check               # cek produk dengan harga modal/jual belum diisi
   python3 main.py --check --product "Sepatu"
 """
 
@@ -73,11 +72,12 @@ def fetch_candidates(models, db, uid, password, name_filter=None, id_filter=None
     )
 
 
-def fetch_empty_prices(models, db, uid, password, value=0, name_filter=None, id_filter=None):
-    """Ambil produk dengan standard_price = value DAN list_price = value."""
+def fetch_empty_prices(models, db, uid, password, name_filter=None, id_filter=None):
+    """Ambil produk di mana harga modal ATAU harga jual belum diisi (= 0 atau 1)."""
     domain = [
-        ['standard_price', '=', value],
-        ['list_price', '=', value],
+        '|',
+        ['standard_price', 'in', [0, 1]],
+        ['list_price', 'in', [0, 1]],
     ]
     if id_filter:
         domain.append(['id', 'in', id_filter])
@@ -89,6 +89,17 @@ def fetch_empty_prices(models, db, uid, password, value=0, name_filter=None, id_
         [domain],
         {'fields': ['id', 'name', 'kode_modal', 'standard_price', 'list_price'], 'order': 'name asc'},
     )
+
+
+def _price_status(standard_price, list_price) -> str:
+    """Tentukan kolom mana yang belum diisi."""
+    modal_kosong = standard_price in (0, 1)
+    jual_kosong = list_price in (0, 1)
+    if modal_kosong and jual_kosong:
+        return 'Modal & Jual'
+    if modal_kosong:
+        return 'Modal'
+    return 'Jual'
 
 
 def write_csv(rows: list[dict], run_at: datetime, suffix='') -> Path:
@@ -113,36 +124,34 @@ def print_separator(char='─', width=68):
 
 
 def cmd_check(models, db, uid, password, args, run_at):
-    """Laporan produk dengan harga modal dan harga jual sama-sama = value."""
-    value = args.value
+    """Laporan produk dengan harga modal atau harga jual belum diisi (0 atau 1)."""
     filter_info = ''
     if args.product:
         filter_info += f'  nama mengandung "{args.product}"'
     if args.ids:
         filter_info += ('  |' if filter_info else '') + f'  ID: {args.ids}'
 
-    print(f'\n  Mencari produk dengan harga modal & harga jual = {fmt_rp(value)}...')
+    print('\n  Mencari produk dengan harga modal atau harga jual belum diisi...')
     if filter_info:
         print(f'  Filter:{filter_info}')
 
     try:
         products = fetch_empty_prices(models, db, uid, password,
-                                      value=value,
                                       name_filter=args.product, id_filter=args.ids)
     except Exception as e:
         print(f'\n[ERROR] Gagal mengambil data: {e}')
         sys.exit(1)
 
     if not products:
-        print(f'\n  Tidak ada produk dengan harga modal & jual = {fmt_rp(value)}.')
+        print('\n  Semua produk sudah memiliki harga modal dan harga jual.')
         return
 
     ts = run_at.strftime('%Y-%m-%d %H:%M:%S')
     print()
     print_separator()
-    print(f'  PRODUK HARGA = {fmt_rp(value)} ({len(products)} produk):')
+    print(f'  HARGA BELUM DIISI ({len(products)} produk):')
     print_separator()
-    print(f"  {'No':<4} {'ID':<6} {'Nama Produk':<36} {'Kode Modal':<14} Modal   Jual")
+    print(f"  {'No':<4} {'ID':<6} {'Nama Produk':<32} {'Kode Modal':<14} {'Modal':<12} {'Jual':<12} Belum Diisi")
     print_separator(char='·')
 
     rows = []
@@ -150,7 +159,8 @@ def cmd_check(models, db, uid, password, args, run_at):
         kode = p['kode_modal'] or '-'
         modal = fmt_rp(p['standard_price'])
         jual = fmt_rp(p['list_price'])
-        print(f"  {i:<4} {p['id']:<6} {p['name'][:36]:<36} {kode:<14} {modal:<9} {jual}")
+        status = _price_status(p['standard_price'], p['list_price'])
+        print(f"  {i:<4} {p['id']:<6} {p['name'][:32]:<32} {kode:<14} {modal:<12} {jual:<12} {status}")
         rows.append({
             'waktu': ts,
             'id_produk': p['id'],
@@ -158,6 +168,7 @@ def cmd_check(models, db, uid, password, args, run_at):
             'kode_modal': kode,
             'harga_modal': p['standard_price'],
             'harga_jual': p['list_price'],
+            'belum_diisi': status,
         })
 
     print_separator()
@@ -310,9 +321,7 @@ def cmd_fill(models, db, uid, password, args, run_at):
 def main():
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument('--check', action='store_true',
-                        help='Cek produk dengan harga modal & harga jual sama-sama = value')
-    parser.add_argument('--value', type=float, default=0,
-                        help='Nilai harga yang dicek saat --check (default: 0)')
+                        help='Cek produk dengan harga modal atau jual belum diisi (0 atau 1)')
     parser.add_argument('--dry-run', action='store_true',
                         help='Preview saja, tidak tulis ke Odoo')
     parser.add_argument('--product', metavar='NAMA',
@@ -325,7 +334,7 @@ def main():
     print()
     print('=' * 72)
     if args.check:
-        print(f'    KODE MODAL DECODER  |  Cek Harga = {fmt_rp(args.value)}')
+        print('    KODE MODAL DECODER  |  Cek Harga Belum Diisi')
     else:
         label = '  [DRY-RUN — tidak ada yang ditulis ke Odoo]' if args.dry_run else ''
         print(f'    KODE MODAL DECODER  |  Chipper ABCDEFGHIY{label}')
