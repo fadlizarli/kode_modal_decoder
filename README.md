@@ -89,19 +89,24 @@ python3 main.py --id 42
 python3 main.py --id 42 55 78 --dry-run
 ```
 
-### Cek produk dengan harga kosong
+### Cek produk berdasarkan nilai harga
 
-Menampilkan produk yang **harga modal** (`standard_price`) dan **harga jual** (`list_price`) keduanya kosong (= 0). Tidak ada yang diubah.
+Menampilkan produk yang **harga modal** (`standard_price`) dan **harga jual** (`list_price`) keduanya sama dengan nilai tertentu. Tidak ada yang diubah.
+
+Gunakan `--value` untuk menentukan nilai yang dicek (default: `0`).
 
 ```bash
-# Semua produk
+# Cek harga modal & jual = 0 (default)
 python3 main.py --check
 
+# Cek harga modal & jual = 1
+python3 main.py --check --value 1
+
 # Dengan filter nama
-python3 main.py --check --product "Sepatu"
+python3 main.py --check --value 1 --product "Sepatu"
 
 # Dengan filter ID
-python3 main.py --check --id 42 55
+python3 main.py --check --value 1 --id 42 55
 ```
 
 ---
@@ -138,16 +143,16 @@ python3 main.py --check --id 42 55
   Log disimpan: logs/20260521_100000.csv
 ```
 
-**Mode cek harga kosong (`--check`)**
+**Mode cek harga = 0 (`--check`)**
 ```
 ========================================================================
-    KODE MODAL DECODER  |  Cek Harga Kosong
+    KODE MODAL DECODER  |  Cek Harga = Rp 0
 ========================================================================
 
-  Mencari produk dengan harga modal & harga jual kosong...
+  Mencari produk dengan harga modal & harga jual = Rp 0...
 
   ────────────────────────────────────────────────────────────────────
-  PRODUK HARGA KOSONG (3 produk):
+  PRODUK HARGA = Rp 0 (3 produk):
   ────────────────────────────────────────────────────────────────────
   No   ID     Nama Produk                          Kode Modal     Modal     Jual
   ··············································································
@@ -157,6 +162,26 @@ python3 main.py --check --id 42 55
   ────────────────────────────────────────────────────────────────────
 
   Log disimpan: logs/20260521_100000_check.csv
+```
+
+**Mode cek harga = 1 (`--check --value 1`)**
+```
+========================================================================
+    KODE MODAL DECODER  |  Cek Harga = Rp 1
+========================================================================
+
+  Mencari produk dengan harga modal & harga jual = Rp 1...
+
+  ────────────────────────────────────────────────────────────────────
+  PRODUK HARGA = Rp 1 (2 produk):
+  ────────────────────────────────────────────────────────────────────
+  No   ID     Nama Produk                          Kode Modal     Modal     Jual
+  ··············································································
+  1    12     Topi Baseball                        GH RB          Rp 1      Rp 1
+  2    33     Kaos Polos                           -              Rp 1      Rp 1
+  ────────────────────────────────────────────────────────────────────
+
+  Log disimpan: logs/20260521_100001_check.csv
 ```
 
 ---
