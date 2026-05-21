@@ -89,24 +89,27 @@ python3 main.py --id 42
 python3 main.py --id 42 55 78 --dry-run
 ```
 
-### Cek produk berdasarkan nilai harga
+### Cek produk dengan harga belum diisi
 
-Menampilkan produk yang **harga modal** (`standard_price`) dan **harga jual** (`list_price`) keduanya sama dengan nilai tertentu. Tidak ada yang diubah.
+Menampilkan produk di mana **harga modal** (`standard_price`) atau **harga jual** (`list_price`) belum diisi — yaitu bernilai `0` atau `1`. Tidak ada yang diubah.
 
-Gunakan `--value` untuk menentukan nilai yang dicek (default: `0`).
+Kolom **Belum Diisi** menunjukkan mana yang bermasalah:
+
+| Nilai | Artinya |
+|---|---|
+| `Modal & Jual` | Keduanya 0 atau 1 |
+| `Modal` | Hanya harga modal yang 0 atau 1 |
+| `Jual` | Hanya harga jual yang 0 atau 1 |
 
 ```bash
-# Cek harga modal & jual = 0 (default)
+# Semua produk dengan harga belum diisi
 python3 main.py --check
 
-# Cek harga modal & jual = 1
-python3 main.py --check --value 1
-
 # Dengan filter nama
-python3 main.py --check --value 1 --product "Sepatu"
+python3 main.py --check --product "Sepatu"
 
 # Dengan filter ID
-python3 main.py --check --value 1 --id 42 55
+python3 main.py --check --id 42 55
 ```
 
 ---
@@ -143,45 +146,26 @@ python3 main.py --check --value 1 --id 42 55
   Log disimpan: logs/20260521_100000.csv
 ```
 
-**Mode cek harga = 0 (`--check`)**
+**Mode cek harga belum diisi (`--check`)**
 ```
 ========================================================================
-    KODE MODAL DECODER  |  Cek Harga = Rp 0
+    KODE MODAL DECODER  |  Cek Harga Belum Diisi
 ========================================================================
 
-  Mencari produk dengan harga modal & harga jual = Rp 0...
+  Mencari produk dengan harga modal atau harga jual belum diisi...
 
-  ────────────────────────────────────────────────────────────────────
-  PRODUK HARGA = Rp 0 (3 produk):
-  ────────────────────────────────────────────────────────────────────
-  No   ID     Nama Produk                          Kode Modal     Modal     Jual
-  ··············································································
-  1    42     Sepatu Nike Air Max                  BEY RT         Rp 0      Rp 0
-  2    55     Kemeja Flannel                       -              Rp 0      Rp 0
-  3    78     Celana Cargo                         AB RB          Rp 0      Rp 0
-  ────────────────────────────────────────────────────────────────────
+  ──────────────────────────────────────────────────────────────────────────
+  HARGA BELUM DIISI (4 produk):
+  ──────────────────────────────────────────────────────────────────────────
+  No   ID     Nama Produk                     Kode Modal     Modal         Jual         Belum Diisi
+  ··································································································
+  1    12     Sepatu Nike Air Max             BEY RT         Rp 0          Rp 0         Modal & Jual
+  2    33     Kemeja Flannel                  AB RB          Rp 0          Rp 150.000   Modal
+  3    55     Celana Cargo                    -              Rp 85.000     Rp 1         Jual
+  4    78     Topi Baseball                   GH RB          Rp 1          Rp 1         Modal & Jual
+  ──────────────────────────────────────────────────────────────────────────
 
   Log disimpan: logs/20260521_100000_check.csv
-```
-
-**Mode cek harga = 1 (`--check --value 1`)**
-```
-========================================================================
-    KODE MODAL DECODER  |  Cek Harga = Rp 1
-========================================================================
-
-  Mencari produk dengan harga modal & harga jual = Rp 1...
-
-  ────────────────────────────────────────────────────────────────────
-  PRODUK HARGA = Rp 1 (2 produk):
-  ────────────────────────────────────────────────────────────────────
-  No   ID     Nama Produk                          Kode Modal     Modal     Jual
-  ··············································································
-  1    12     Topi Baseball                        GH RB          Rp 1      Rp 1
-  2    33     Kaos Polos                           -              Rp 1      Rp 1
-  ────────────────────────────────────────────────────────────────────
-
-  Log disimpan: logs/20260521_100001_check.csv
 ```
 
 ---
@@ -208,7 +192,7 @@ Setiap run otomatis menyimpan log ke folder `logs/`.
 | `status` | `OK` / `GAGAL` / `DRY-RUN` / `DILEWATI` |
 | `catatan` | Alasan skip atau pesan error |
 
-**Kolom log cek harga kosong:**
+**Kolom log cek harga belum diisi:**
 
 | Kolom | Keterangan |
 |---|---|
@@ -218,6 +202,7 @@ Setiap run otomatis menyimpan log ke folder `logs/`.
 | `kode_modal` | Isi kode modal (`-` jika kosong) |
 | `harga_modal` | Nilai `standard_price` |
 | `harga_jual` | Nilai `list_price` |
+| `belum_diisi` | `Modal & Jual` / `Modal` / `Jual` |
 
 Folder `logs/` tidak ikut ke repository (sudah masuk `.gitignore`).
 
