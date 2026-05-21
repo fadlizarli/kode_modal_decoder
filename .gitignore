@@ -1,4 +1,5 @@
 config.ini
+logs/
 __pycache__/
 *.pyc
 *.pyo

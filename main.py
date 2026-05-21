@@ -13,10 +13,15 @@ Penggunaan:
 """
 
 import sys
+import csv
 import argparse
 import configparser
 import xmlrpc.client
+from datetime import datetime
+from pathlib import Path
 from decoder import decode, is_abcdefghiy
+
+LOGS_DIR = Path('logs')
 
 
 def load_config(path='config.ini'):
@@ -48,11 +53,7 @@ def connect_odoo(url, db, username, password):
 
 
 def fetch_candidates(models, db, uid, password, name_filter=None, id_filter=None):
-    """Ambil produk: kode_modal terisi, standard_price kosong (= 0).
-
-    name_filter : substring nama produk (case-insensitive)
-    id_filter   : list of int product template IDs
-    """
+    """Ambil produk: kode_modal terisi, standard_price kosong (= 0)."""
     domain = [
         ['kode_modal', '!=', False],
         ['kode_modal', '!=', ''],
@@ -68,6 +69,19 @@ def fetch_candidates(models, db, uid, password, name_filter=None, id_filter=None
         [domain],
         {'fields': ['id', 'name', 'kode_modal', 'standard_price'], 'order': 'name asc'},
     )
+
+
+def write_csv(rows: list[dict], run_at: datetime) -> Path:
+    """Tulis log rows ke CSV di folder logs/. Return path file."""
+    LOGS_DIR.mkdir(exist_ok=True)
+    filename = LOGS_DIR / f"{run_at.strftime('%Y%m%d_%H%M%S')}.csv"
+    fieldnames = ['waktu', 'id_produk', 'nama_produk', 'kode_modal',
+                  'modal_lama', 'modal_baru', 'status', 'catatan']
+    with open(filename, 'w', newline='', encoding='utf-8') as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+    return filename
 
 
 def fmt_rp(amount: int) -> str:
@@ -88,6 +102,7 @@ def main():
                         help='Filter by ID produk (bisa lebih dari satu)')
     args = parser.parse_args()
     dry_run = args.dry_run
+    run_at = datetime.now()
 
     print()
     print('=' * 72)
@@ -125,36 +140,52 @@ def main():
         return
 
     to_update = []
-    skipped = []
+    log_rows = []
+    ts = run_at.strftime('%Y-%m-%d %H:%M:%S')
 
     for p in candidates:
         kode = (p['kode_modal'] or '').strip()
         if not kode:
             continue
+
+        base = {
+            'waktu': ts,
+            'id_produk': p['id'],
+            'nama_produk': p['name'],
+            'kode_modal': kode,
+            'modal_lama': 0,
+            'modal_baru': '',
+        }
+
         if not is_abcdefghiy(kode):
-            skipped.append((p['name'], kode, 'Bukan chipper ABCDEFGHIY'))
+            log_rows.append({**base, 'status': 'DILEWATI', 'catatan': 'Bukan chipper ABCDEFGHIY'})
             continue
         cost = decode(kode)
         if cost is None:
-            skipped.append((p['name'], kode, 'Format tidak dikenali'))
+            log_rows.append({**base, 'status': 'DILEWATI', 'catatan': 'Format tidak dikenali'})
             continue
         if cost <= 0:
-            skipped.append((p['name'], kode, 'Hasil decode = 0'))
+            log_rows.append({**base, 'status': 'DILEWATI', 'catatan': 'Hasil decode = 0'})
             continue
-        to_update.append({'id': p['id'], 'name': p['name'], 'kode_modal': kode, 'cost': cost})
 
-    if skipped:
+        to_update.append({'id': p['id'], 'name': p['name'], 'kode_modal': kode, 'cost': cost})
+        log_rows.append({**base, 'modal_baru': cost, 'status': 'PENDING', 'catatan': ''})
+
+    skipped_rows = [r for r in log_rows if r['status'] == 'DILEWATI']
+    if skipped_rows:
         print()
         print_separator()
-        print(f'  DILEWATI ({len(skipped)} produk):')
+        print(f'  DILEWATI ({len(skipped_rows)} produk):')
         print_separator()
         print(f"  {'Nama Produk':<36} {'Kode Modal':<14} Alasan")
         print_separator(char='·')
-        for name, kode, reason in skipped:
-            print(f"  {name[:36]:<36} {kode:<14} {reason}")
+        for r in skipped_rows:
+            print(f"  {r['nama_produk'][:36]:<36} {r['kode_modal']:<14} {r['catatan']}")
 
     if not to_update:
         print('\n  Tidak ada produk yang bisa di-decode dengan chipper ABCDEFGHIY.')
+        csv_path = write_csv(log_rows, run_at)
+        print(f'\n  Log disimpan: {csv_path}')
         return
 
     print()
@@ -168,9 +199,14 @@ def main():
     print_separator()
 
     if dry_run:
+        for r in log_rows:
+            if r['status'] == 'PENDING':
+                r['status'] = 'DRY-RUN'
+        csv_path = write_csv(log_rows, run_at)
         print()
         print('  Mode DRY-RUN: tidak ada perubahan yang ditulis ke Odoo.')
         print(f'  {len(to_update)} produk siap diperbarui jika dijalankan tanpa --dry-run.')
+        print(f'\n  Log disimpan: {csv_path}')
         print()
         print('=' * 72)
         return
@@ -184,6 +220,8 @@ def main():
     print()
     success = 0
     failed = 0
+    pending = {r['id_produk']: r for r in log_rows if r['status'] == 'PENDING'}
+
     for p in to_update:
         try:
             models.execute_kw(
@@ -192,15 +230,21 @@ def main():
                 [[p['id']], {'standard_price': float(p['cost'])}],
             )
             print(f"  [OK]    {p['name']}  →  {fmt_rp(p['cost'])}")
+            pending[p['id']]['status'] = 'OK'
             success += 1
         except Exception as e:
             print(f"  [GAGAL] {p['name']}  →  {e}")
+            pending[p['id']]['status'] = 'GAGAL'
+            pending[p['id']]['catatan'] = str(e)
             failed += 1
+
+    csv_path = write_csv(log_rows, run_at)
 
     print()
     print('=' * 72)
     print(f'  Selesai: {success} produk berhasil diperbarui', end='')
     print(f', {failed} gagal' if failed else '')
+    print(f'  Log disimpan: {csv_path}')
     print('=' * 72)
 
 
