@@ -11,6 +11,8 @@ Penggunaan:
   python3 main.py --id 42 55 78         # filter by ID produk (bisa lebih dari satu)
   python3 main.py --check               # cek produk dengan harga modal/jual belum diisi
   python3 main.py --check --product "Sepatu"
+  python3 main.py --from-csv file.csv   # update harga dari file CSV
+  python3 main.py --from-csv file.csv --dry-run
 """
 
 import sys
@@ -93,6 +95,72 @@ def fetch_empty_prices(models, db, uid, password, name_filter=None, id_filter=No
         [domain],
         {'fields': ['id', 'name', 'kode_modal', 'standard_price', 'list_price'], 'order': 'name asc'},
     )
+
+
+def fetch_products_by_ids(models, db, uid, password, ids: list[int]):
+    """Ambil data produk berdasarkan list ID."""
+    return models.execute_kw(
+        db, uid, password,
+        'product.template', 'search_read',
+        [[['id', 'in', ids]]],
+        {'fields': ['id', 'name', 'product_variant_ids']},
+    )
+
+
+def read_price_csv(path: str) -> tuple[list[dict], list[str]]:
+    """Baca CSV harga. Return (rows_valid, errors).
+
+    Kolom wajib : id_produk
+    Kolom opsional: harga_modal, harga_jual  (kosong = tidak diupdate)
+    """
+    required_col = 'id_produk'
+    price_cols = ('harga_modal', 'harga_jual')
+    rows, errors = [], []
+
+    try:
+        with open(path, newline='', encoding='utf-8-sig') as f:
+            reader = csv.DictReader(f)
+            if required_col not in (reader.fieldnames or []):
+                return [], [f"Kolom '{required_col}' tidak ditemukan di CSV."]
+
+            for lineno, row in enumerate(reader, start=2):
+                raw_id = row.get('id_produk', '').strip()
+                if not raw_id:
+                    continue
+                try:
+                    product_id = int(raw_id)
+                except ValueError:
+                    errors.append(f"Baris {lineno}: id_produk '{raw_id}' bukan angka — dilewati")
+                    continue
+
+                harga_modal = harga_jual = None
+                for col in price_cols:
+                    val = row.get(col, '').strip()
+                    if not val:
+                        continue
+                    try:
+                        parsed = float(val.replace('.', '').replace(',', '.'))
+                        if col == 'harga_modal':
+                            harga_modal = parsed
+                        else:
+                            harga_jual = parsed
+                    except ValueError:
+                        errors.append(f"Baris {lineno}: nilai '{col}' tidak valid — dilewati")
+
+                if harga_modal is None and harga_jual is None:
+                    continue  # baris tanpa harga apapun, skip
+
+                rows.append({
+                    'id_produk': product_id,
+                    'harga_modal': harga_modal,
+                    'harga_jual': harga_jual,
+                })
+    except FileNotFoundError:
+        return [], [f"File tidak ditemukan: {path}"]
+    except Exception as e:
+        return [], [f"Gagal membaca CSV: {e}"]
+
+    return rows, errors
 
 
 def _price_status(standard_price, list_price) -> str:
@@ -322,10 +390,147 @@ def cmd_fill(models, db, uid, password, args, run_at):
     print('=' * 72)
 
 
+def cmd_from_csv(models, db, uid, password, args, run_at):
+    """Update harga modal dan/atau harga jual dari file CSV."""
+    csv_path = args.from_csv
+
+    print(f'\n  Membaca file: {csv_path}')
+    rows, errors = read_price_csv(csv_path)
+
+    if errors:
+        print()
+        for e in errors:
+            print(f'  [PERINGATAN] {e}')
+
+    if not rows:
+        print('\n  Tidak ada baris valid di CSV. Selesai.')
+        return
+
+    # Ambil info produk dari Odoo
+    ids = [r['id_produk'] for r in rows]
+    try:
+        products = fetch_products_by_ids(models, db, uid, password, ids)
+    except Exception as e:
+        print(f'\n[ERROR] Gagal mengambil data dari Odoo: {e}')
+        sys.exit(1)
+
+    product_map = {p['id']: p for p in products}
+    ts = run_at.strftime('%Y-%m-%d %H:%M:%S')
+
+    to_update = []
+    skipped = []
+
+    for r in rows:
+        pid = r['id_produk']
+        if pid not in product_map:
+            skipped.append((pid, '-', f'ID {pid} tidak ditemukan di Odoo'))
+            continue
+        p = product_map[pid]
+        to_update.append({
+            'id': pid,
+            'name': p['name'],
+            'variant_ids': p['product_variant_ids'],
+            'harga_modal': r['harga_modal'],
+            'harga_jual': r['harga_jual'],
+        })
+
+    if skipped:
+        print()
+        print_separator()
+        print(f'  DILEWATI ({len(skipped)} baris):')
+        print_separator(char='·')
+        for pid, _, reason in skipped:
+            print(f'  ID {pid:<6} — {reason}')
+
+    if not to_update:
+        print('\n  Tidak ada produk yang bisa diperbarui.')
+        return
+
+    print()
+    print_separator()
+    label = '  [DRY-RUN]' if args.dry_run else ''
+    print(f'  AKAN DIPERBARUI ({len(to_update)} produk):{label}')
+    print_separator()
+    print(f"  {'No':<4} {'ID':<6} {'Nama Produk':<34} {'Harga Modal':<16} Harga Jual")
+    print_separator(char='·')
+    for i, p in enumerate(to_update, 1):
+        modal_str = fmt_rp(p['harga_modal']) if p['harga_modal'] is not None else '(tidak diubah)'
+        jual_str  = fmt_rp(p['harga_jual'])  if p['harga_jual']  is not None else '(tidak diubah)'
+        print(f"  {i:<4} {p['id']:<6} {p['name'][:34]:<34} {modal_str:<16} {jual_str}")
+    print_separator()
+
+    log_rows = []
+
+    if args.dry_run:
+        for p in to_update:
+            log_rows.append({
+                'waktu': ts, 'id_produk': p['id'], 'nama_produk': p['name'],
+                'harga_modal_baru': p['harga_modal'] if p['harga_modal'] is not None else '',
+                'harga_jual_baru': p['harga_jual'] if p['harga_jual'] is not None else '',
+                'status': 'DRY-RUN', 'catatan': '',
+            })
+        log_path = write_csv(log_rows, run_at, suffix='import')
+        print()
+        print('  Mode DRY-RUN: tidak ada perubahan yang ditulis ke Odoo.')
+        print(f'\n  Log disimpan: {log_path}')
+        print()
+        print('=' * 72)
+        return
+
+    print()
+    confirm = input('  Lanjutkan update harga? [y/N]: ').strip().lower()
+    if confirm != 'y':
+        print('\n  Dibatalkan.')
+        return
+
+    print()
+    success = 0
+    failed = 0
+
+    for p in to_update:
+        status, catatan = 'OK', ''
+        try:
+            if p['harga_modal'] is not None:
+                models.execute_kw(db, uid, password,
+                    'product.product', 'write',
+                    [p['variant_ids'], {'standard_price': p['harga_modal']}])
+            if p['harga_jual'] is not None:
+                models.execute_kw(db, uid, password,
+                    'product.template', 'write',
+                    [[p['id']], {'list_price': p['harga_jual']}])
+
+            modal_str = fmt_rp(p['harga_modal']) if p['harga_modal'] is not None else '-'
+            jual_str  = fmt_rp(p['harga_jual'])  if p['harga_jual']  is not None else '-'
+            varian_info = f" ({len(p['variant_ids'])} varian)" if len(p['variant_ids']) > 1 else ''
+            print(f"  [OK]    {p['name']}{varian_info}  modal={modal_str}  jual={jual_str}")
+            success += 1
+        except Exception as e:
+            print(f"  [GAGAL] {p['name']}  →  {e}")
+            status, catatan = 'GAGAL', str(e)
+            failed += 1
+
+        log_rows.append({
+            'waktu': ts, 'id_produk': p['id'], 'nama_produk': p['name'],
+            'harga_modal_baru': p['harga_modal'] if p['harga_modal'] is not None else '',
+            'harga_jual_baru': p['harga_jual'] if p['harga_jual'] is not None else '',
+            'status': status, 'catatan': catatan,
+        })
+
+    log_path = write_csv(log_rows, run_at, suffix='import')
+    print()
+    print('=' * 72)
+    print(f'  Selesai: {success} produk berhasil diperbarui', end='')
+    print(f', {failed} gagal' if failed else '')
+    print(f'  Log disimpan: {log_path}')
+    print('=' * 72)
+
+
 def main():
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument('--check', action='store_true',
                         help='Cek produk dengan harga modal atau jual belum diisi (0 atau 1)')
+    parser.add_argument('--from-csv', metavar='FILE',
+                        help='Update harga dari file CSV (kolom: id_produk, harga_modal, harga_jual)')
     parser.add_argument('--dry-run', action='store_true',
                         help='Preview saja, tidak tulis ke Odoo')
     parser.add_argument('--product', metavar='NAMA',
@@ -339,6 +544,9 @@ def main():
     print('=' * 72)
     if args.check:
         print('    KODE MODAL DECODER  |  Cek Harga Belum Diisi')
+    elif args.from_csv:
+        label = '  [DRY-RUN]' if args.dry_run else ''
+        print(f'    KODE MODAL DECODER  |  Import Harga dari CSV{label}')
     else:
         label = '  [DRY-RUN — tidak ada yang ditulis ke Odoo]' if args.dry_run else ''
         print(f'    KODE MODAL DECODER  |  Chipper ABCDEFGHIY{label}')
@@ -356,6 +564,8 @@ def main():
 
     if args.check:
         cmd_check(models, db, uid, password, args, run_at)
+    elif args.from_csv:
+        cmd_from_csv(models, db, uid, password, args, run_at)
     else:
         cmd_fill(models, db, uid, password, args, run_at)
 
