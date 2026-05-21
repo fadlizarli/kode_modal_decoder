@@ -5,8 +5,11 @@ Mengisi kolom modal/cost (standard_price) dari kode_modal yang sudah terisi,
 khusus produk yang belum memiliki harga modal (standard_price = 0).
 
 Penggunaan:
-  python3 main.py              # mode normal (tulis ke Odoo)
-  python3 main.py --dry-run   # hanya preview, tidak ada yang ditulis
+  python3 main.py                        # semua produk eligible
+  python3 main.py --dry-run             # preview saja, tidak ditulis
+  python3 main.py --product "Nama"      # filter nama (substring, case-insensitive)
+  python3 main.py --id 42 55 78         # filter by ID produk (bisa lebih dari satu)
+  python3 main.py --product "Sepatu" --dry-run
 """
 
 import sys
@@ -44,16 +47,25 @@ def connect_odoo(url, db, username, password):
     return uid, models
 
 
-def fetch_candidates(models, db, uid, password):
-    """Ambil produk: kode_modal terisi, standard_price kosong (= 0)."""
+def fetch_candidates(models, db, uid, password, name_filter=None, id_filter=None):
+    """Ambil produk: kode_modal terisi, standard_price kosong (= 0).
+
+    name_filter : substring nama produk (case-insensitive)
+    id_filter   : list of int product template IDs
+    """
+    domain = [
+        ['kode_modal', '!=', False],
+        ['kode_modal', '!=', ''],
+        ['standard_price', '=', 0],
+    ]
+    if id_filter:
+        domain.append(['id', 'in', id_filter])
+    if name_filter:
+        domain.append(['name', 'ilike', name_filter])
     return models.execute_kw(
         db, uid, password,
         'product.template', 'search_read',
-        [[
-            ['kode_modal', '!=', False],
-            ['kode_modal', '!=', ''],
-            ['standard_price', '=', 0],
-        ]],
+        [domain],
         {'fields': ['id', 'name', 'kode_modal', 'standard_price'], 'order': 'name asc'},
     )
 
@@ -70,6 +82,10 @@ def main():
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument('--dry-run', action='store_true',
                         help='Preview saja, tidak tulis ke Odoo')
+    parser.add_argument('--product', metavar='NAMA',
+                        help='Filter nama produk (substring, tidak case-sensitive)')
+    parser.add_argument('--id', dest='ids', metavar='ID', nargs='+', type=int,
+                        help='Filter by ID produk (bisa lebih dari satu)')
     args = parser.parse_args()
     dry_run = args.dry_run
 
@@ -89,9 +105,17 @@ def main():
     uid, models = connect_odoo(url, db, username, password)
     print(f'OK  (uid={uid})')
 
+    filter_info = ''
+    if args.product:
+        filter_info += f'  nama mengandung "{args.product}"'
+    if args.ids:
+        filter_info += ('  |' if filter_info else '') + f'  ID: {args.ids}'
     print('\n  Mencari produk dengan kode_modal terisi & modal/cost kosong...')
+    if filter_info:
+        print(f'  Filter:{filter_info}')
     try:
-        candidates = fetch_candidates(models, db, uid, password)
+        candidates = fetch_candidates(models, db, uid, password,
+                                      name_filter=args.product, id_filter=args.ids)
     except Exception as e:
         print(f'\n[ERROR] Gagal mengambil data: {e}')
         sys.exit(1)
