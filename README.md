@@ -1,10 +1,6 @@
 # Kode Modal Decoder
 
-Aplikasi terminal Python untuk mengisi kolom **modal/cost** (`standard_price`) produk di Odoo secara otomatis, berdasarkan `kode_modal` yang sudah terisi menggunakan chipper **ABCDEFGHIY**.
-
-Aplikasi ini hanya memproses produk yang memenuhi dua syarat:
-- `kode_modal` **terisi**
-- `standard_price` **kosong** (= 0)
+Aplikasi terminal Python untuk mengelola harga produk di Odoo — mengisi `standard_price` dari `kode_modal` (chipper ABCDEFGHIY), mengecek produk yang belum ada harganya, dan mengupdate harga dari file CSV.
 
 ---
 
@@ -71,13 +67,15 @@ password = password_anda
 
 ## Penggunaan
 
-### Isi modal/cost dari kode_modal
+### 1. Isi modal/cost dari kode_modal
+
+Mengisi `standard_price` produk yang `kode_modal`-nya sudah terisi tapi harga modal masih 0.
 
 ```bash
 # Semua produk eligible
 python3 main.py
 
-# Preview tanpa menulis ke Odoo (dry-run)
+# Preview tanpa menulis ke Odoo
 python3 main.py --dry-run
 
 # Filter nama produk (substring, tidak case-sensitive)
@@ -89,9 +87,11 @@ python3 main.py --id 42
 python3 main.py --id 42 55 78 --dry-run
 ```
 
-### Cek produk dengan harga belum diisi
+---
 
-Menampilkan produk di mana **harga modal** (`standard_price`) atau **harga jual** (`list_price`) belum diisi — yaitu bernilai `0` atau `1`. Tidak ada yang diubah.
+### 2. Cek produk dengan harga belum diisi
+
+Menampilkan produk di mana **harga modal** (`standard_price`) atau **harga jual** (`list_price`) bernilai `0` atau `1` (dianggap belum diisi). Tidak ada yang diubah.
 
 Kolom **Belum Diisi** menunjukkan mana yang bermasalah:
 
@@ -102,7 +102,7 @@ Kolom **Belum Diisi** menunjukkan mana yang bermasalah:
 | `Jual` | Hanya harga jual yang 0 atau 1 |
 
 ```bash
-# Semua produk dengan harga belum diisi
+# Semua produk
 python3 main.py --check
 
 # Dengan filter nama
@@ -114,6 +114,52 @@ python3 main.py --check --id 42 55
 
 ---
 
+### 3. Update harga dari file CSV
+
+Mengupdate `standard_price` dan/atau `list_price` dari file CSV yang ditulis manual. Kolom harga yang dikosongkan tidak akan disentuh di Odoo.
+
+```bash
+# Preview dulu
+python3 main.py --from-csv harga.csv --dry-run
+
+# Eksekusi
+python3 main.py --from-csv harga.csv
+```
+
+**Format CSV** (header wajib, kolom harga opsional):
+
+```csv
+id_produk,harga_modal,harga_jual
+42,25000,150000
+55,,85000
+78,12000,
+```
+
+| Kolom | Keterangan |
+|---|---|
+| `id_produk` | ID `product.template` di Odoo (wajib) |
+| `harga_modal` | Nilai baru `standard_price` (kosong = tidak diubah) |
+| `harga_jual` | Nilai baru `list_price` (kosong = tidak diubah) |
+
+Angka boleh menggunakan titik sebagai pemisah ribuan: `12.000`, `1.500.000`.
+
+**Alur kerja yang disarankan:**
+
+```bash
+# 1. Export daftar produk yang belum ada harga
+python3 main.py --check
+
+# 2. Edit file logs/YYYYMMDD_check.csv — isi kolom harga_modal / harga_jual
+
+# 3. Preview hasil sebelum dieksekusi
+python3 main.py --from-csv logs/20260521_143022_check.csv --dry-run
+
+# 4. Eksekusi
+python3 main.py --from-csv logs/20260521_143022_check.csv
+```
+
+---
+
 ## Contoh Output Terminal
 
 **Mode isi modal/cost (`--dry-run`)**
@@ -121,12 +167,6 @@ python3 main.py --check --id 42 55
 ========================================================================
     KODE MODAL DECODER  |  Chipper ABCDEFGHIY  [DRY-RUN]
 ========================================================================
-
-  Odoo : http://localhost:8069
-  DB   : toko_db
-  User : admin
-
-  Menghubungkan... OK  (uid=2)
 
   Mencari produk dengan kode_modal terisi & modal/cost kosong...
 
@@ -141,7 +181,6 @@ python3 main.py --check --id 42 55
   ────────────────────────────────────────────────────────────────────
 
   Mode DRY-RUN: tidak ada perubahan yang ditulis ke Odoo.
-  3 produk siap diperbarui jika dijalankan tanpa --dry-run.
 
   Log disimpan: logs/20260521_100000.csv
 ```
@@ -168,6 +207,29 @@ python3 main.py --check --id 42 55
   Log disimpan: logs/20260521_100000_check.csv
 ```
 
+**Mode import CSV (`--from-csv`)**
+```
+========================================================================
+    KODE MODAL DECODER  |  Import Harga dari CSV  [DRY-RUN]
+========================================================================
+
+  Membaca file: logs/20260521_100000_check.csv
+
+  ────────────────────────────────────────────────────────────────────
+  AKAN DIPERBARUI (3 produk):  [DRY-RUN]
+  ────────────────────────────────────────────────────────────────────
+  No   ID     Nama Produk                       Harga Modal      Harga Jual
+  ·········································································
+  1    12     Sepatu Nike Air Max               Rp 25.000        Rp 150.000
+  2    33     Kemeja Flannel                    Rp 12.000        (tidak diubah)
+  3    55     Celana Cargo                      (tidak diubah)   Rp 85.000
+  ────────────────────────────────────────────────────────────────────
+
+  Mode DRY-RUN: tidak ada perubahan yang ditulis ke Odoo.
+
+  Log disimpan: logs/20260521_100001_import.csv
+```
+
 ---
 
 ## Log CSV
@@ -176,8 +238,9 @@ Setiap run otomatis menyimpan log ke folder `logs/`.
 
 | Nama file | Kapan dibuat |
 |---|---|
-| `logs/YYYYMMDD_HHMMSS.csv` | Setiap run isi modal/cost |
+| `logs/YYYYMMDD_HHMMSS.csv` | Setiap run isi modal/cost dari kode_modal |
 | `logs/YYYYMMDD_HHMMSS_check.csv` | Setiap run `--check` |
+| `logs/YYYYMMDD_HHMMSS_import.csv` | Setiap run `--from-csv` |
 
 **Kolom log isi modal/cost:**
 
@@ -200,9 +263,21 @@ Setiap run otomatis menyimpan log ke folder `logs/`.
 | `id_produk` | ID `product.template` di Odoo |
 | `nama_produk` | Nama produk |
 | `kode_modal` | Isi kode modal (`-` jika kosong) |
-| `harga_modal` | Nilai `standard_price` |
-| `harga_jual` | Nilai `list_price` |
+| `harga_modal` | Nilai `standard_price` saat ini |
+| `harga_jual` | Nilai `list_price` saat ini |
 | `belum_diisi` | `Modal & Jual` / `Modal` / `Jual` |
+
+**Kolom log import CSV:**
+
+| Kolom | Keterangan |
+|---|---|
+| `waktu` | Timestamp run |
+| `id_produk` | ID `product.template` di Odoo |
+| `nama_produk` | Nama produk |
+| `harga_modal_baru` | Nilai yang ditulis ke `standard_price` (kosong = tidak diubah) |
+| `harga_jual_baru` | Nilai yang ditulis ke `list_price` (kosong = tidak diubah) |
+| `status` | `OK` / `GAGAL` / `DRY-RUN` |
+| `catatan` | Pesan error jika gagal |
 
 Folder `logs/` tidak ikut ke repository (sudah masuk `.gitignore`).
 
