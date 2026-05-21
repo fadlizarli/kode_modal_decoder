@@ -19,7 +19,7 @@ import configparser
 import xmlrpc.client
 from datetime import datetime
 from pathlib import Path
-from decoder import decode, is_abcdefghiy, is_mobilsedan
+from decoder import decode, is_abcdefghiy
 
 LOGS_DIR = Path('logs')
 
@@ -158,11 +158,7 @@ def main():
         }
 
         if not is_abcdefghiy(kode):
-            if is_mobilsedan(kode):
-                catatan = 'Chipper MOBILSEDAN (belum didukung)'
-            else:
-                catatan = 'Format huruf tidak dikenali'
-            log_rows.append({**base, 'status': 'DILEWATI', 'catatan': catatan})
+            log_rows.append({**base, 'status': 'DILEWATI', 'catatan': 'Format huruf tidak dikenali'})
             continue
         cost = decode(kode)
         if cost is None:

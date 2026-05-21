@@ -8,24 +8,11 @@ MULTIPLIERS = {'JT': 1_000_000, 'RB': 1_000, 'RT': 100}
 _CIPHER_CHARS = set(CIPHER_MAP.keys())
 _SUFFIX_WORDS = set(MULTIPLIERS.keys())
 
-# Huruf yang hanya ada di MOBILSEDAN (tidak ada di ABCDEFGHIY)
-_MOBILSEDAN_UNIQUE = set('MOLSN')
-
-
-def _letter_part(kode: str) -> str:
-    """Ambil bagian huruf (sebelum suffix) dari kode modal."""
-    parts = kode.strip().upper().split()
-    return parts[0] if parts else ''
-
-
-def is_mobilsedan(kode: str) -> bool:
-    """Return True jika kode mengandung huruf unik MOBILSEDAN (M/O/L/S/N)."""
-    return bool(_MOBILSEDAN_UNIQUE & set(_letter_part(kode)))
-
 
 def is_abcdefghiy(kode: str) -> bool:
     """Return True if all letter chars in kode belong to ABCDEFGHIY cipher."""
-    letters = _letter_part(kode)
+    parts = kode.strip().upper().split()
+    letters = parts[0] if parts else ''
     return bool(letters) and all(c in _CIPHER_CHARS for c in letters)
 
 
