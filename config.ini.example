@@ -1,0 +1,5 @@
+[odoo]
+url      = http://localhost:8069
+db       = nama_database
+username = admin
+password = password_anda
