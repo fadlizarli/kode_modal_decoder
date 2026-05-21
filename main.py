@@ -67,7 +67,7 @@ def fetch_candidates(models, db, uid, password, name_filter=None, id_filter=None
         db, uid, password,
         'product.template', 'search_read',
         [domain],
-        {'fields': ['id', 'name', 'kode_modal', 'standard_price'], 'order': 'name asc'},
+        {'fields': ['id', 'name', 'kode_modal', 'standard_price', 'product_variant_ids'], 'order': 'name asc'},
     )
 
 
@@ -168,7 +168,13 @@ def main():
             log_rows.append({**base, 'status': 'DILEWATI', 'catatan': 'Hasil decode = 0'})
             continue
 
-        to_update.append({'id': p['id'], 'name': p['name'], 'kode_modal': kode, 'cost': cost})
+        to_update.append({
+            'id': p['id'],
+            'name': p['name'],
+            'kode_modal': kode,
+            'cost': cost,
+            'variant_ids': p['product_variant_ids'],
+        })
         log_rows.append({**base, 'modal_baru': cost, 'status': 'PENDING', 'catatan': ''})
 
     skipped_rows = [r for r in log_rows if r['status'] == 'DILEWATI']
@@ -224,12 +230,14 @@ def main():
 
     for p in to_update:
         try:
+            # Tulis ke product.product agar propagate ke semua varian
             models.execute_kw(
                 db, uid, password,
-                'product.template', 'write',
-                [[p['id']], {'standard_price': float(p['cost'])}],
+                'product.product', 'write',
+                [p['variant_ids'], {'standard_price': float(p['cost'])}],
             )
-            print(f"  [OK]    {p['name']}  →  {fmt_rp(p['cost'])}")
+            varian_info = f" ({len(p['variant_ids'])} varian)" if len(p['variant_ids']) > 1 else ''
+            print(f"  [OK]    {p['name']}{varian_info}  →  {fmt_rp(p['cost'])}")
             pending[p['id']]['status'] = 'OK'
             success += 1
         except Exception as e:
