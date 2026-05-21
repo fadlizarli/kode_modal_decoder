@@ -3,9 +3,14 @@
 Kode Modal Decoder - Chipper ABCDEFGHIY
 Mengisi kolom modal/cost (standard_price) dari kode_modal yang sudah terisi,
 khusus produk yang belum memiliki harga modal (standard_price = 0).
+
+Penggunaan:
+  python3 main.py              # mode normal (tulis ke Odoo)
+  python3 main.py --dry-run   # hanya preview, tidak ada yang ditulis
 """
 
 import sys
+import argparse
 import configparser
 import xmlrpc.client
 from decoder import decode, is_abcdefghiy
@@ -62,9 +67,16 @@ def print_separator(char='─', width=68):
 
 
 def main():
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument('--dry-run', action='store_true',
+                        help='Preview saja, tidak tulis ke Odoo')
+    args = parser.parse_args()
+    dry_run = args.dry_run
+
     print()
     print('=' * 72)
-    print('    KODE MODAL DECODER  |  Chipper ABCDEFGHIY')
+    label = '  [DRY-RUN — tidak ada yang ditulis ke Odoo]' if dry_run else ''
+    print(f'    KODE MODAL DECODER  |  Chipper ABCDEFGHIY{label}')
     print('=' * 72)
 
     cfg = load_config()
@@ -130,6 +142,14 @@ def main():
     for i, p in enumerate(to_update, 1):
         print(f"  {i:<4} {p['name'][:36]:<36} {p['kode_modal']:<14} {fmt_rp(p['cost'])}")
     print_separator()
+
+    if dry_run:
+        print()
+        print('  Mode DRY-RUN: tidak ada perubahan yang ditulis ke Odoo.')
+        print(f'  {len(to_update)} produk siap diperbarui jika dijalankan tanpa --dry-run.')
+        print()
+        print('=' * 72)
+        return
 
     print()
     confirm = input('  Lanjutkan pengisian modal/cost? [y/N]: ').strip().lower()
