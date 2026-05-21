@@ -73,11 +73,15 @@ def fetch_candidates(models, db, uid, password, name_filter=None, id_filter=None
 
 
 def fetch_empty_prices(models, db, uid, password, name_filter=None, id_filter=None):
-    """Ambil produk di mana harga modal ATAU harga jual belum diisi (= 0 atau 1)."""
+    """Ambil produk di mana harga modal ATAU harga jual belum diisi (= 0 atau 1).
+
+    standard_price adalah company_dependent field — tidak support operator 'in',
+    sehingga setiap kondisi harus ditulis sebagai dua klausa = yang di-OR secara eksplisit.
+    """
     domain = [
         '|',
-        ['standard_price', 'in', [0, 1]],
-        ['list_price', 'in', [0, 1]],
+        '|', ['standard_price', '=', 0], ['standard_price', '=', 1],
+        '|', ['list_price', '=', 0], ['list_price', '=', 1],
     ]
     if id_filter:
         domain.append(['id', 'in', id_filter])
