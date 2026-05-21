@@ -9,7 +9,8 @@ Penggunaan:
   python3 main.py --dry-run             # preview saja, tidak ditulis
   python3 main.py --product "Nama"      # filter nama (substring, case-insensitive)
   python3 main.py --id 42 55 78         # filter by ID produk (bisa lebih dari satu)
-  python3 main.py --product "Sepatu" --dry-run
+  python3 main.py --check               # cek produk dengan harga modal & jual kosong
+  python3 main.py --check --product "Sepatu"
 """
 
 import sys
@@ -71,12 +72,30 @@ def fetch_candidates(models, db, uid, password, name_filter=None, id_filter=None
     )
 
 
-def write_csv(rows: list[dict], run_at: datetime) -> Path:
+def fetch_empty_prices(models, db, uid, password, name_filter=None, id_filter=None):
+    """Ambil produk dengan standard_price = 0 DAN list_price = 0."""
+    domain = [
+        ['standard_price', '=', 0],
+        ['list_price', '=', 0],
+    ]
+    if id_filter:
+        domain.append(['id', 'in', id_filter])
+    if name_filter:
+        domain.append(['name', 'ilike', name_filter])
+    return models.execute_kw(
+        db, uid, password,
+        'product.template', 'search_read',
+        [domain],
+        {'fields': ['id', 'name', 'kode_modal', 'standard_price', 'list_price'], 'order': 'name asc'},
+    )
+
+
+def write_csv(rows: list[dict], run_at: datetime, suffix='') -> Path:
     """Tulis log rows ke CSV di folder logs/. Return path file."""
     LOGS_DIR.mkdir(exist_ok=True)
-    filename = LOGS_DIR / f"{run_at.strftime('%Y%m%d_%H%M%S')}.csv"
-    fieldnames = ['waktu', 'id_produk', 'nama_produk', 'kode_modal',
-                  'modal_lama', 'modal_baru', 'status', 'catatan']
+    tag = f'_{suffix}' if suffix else ''
+    filename = LOGS_DIR / f"{run_at.strftime('%Y%m%d_%H%M%S')}{tag}.csv"
+    fieldnames = list(rows[0].keys()) if rows else []
     with open(filename, 'w', newline='', encoding='utf-8') as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
@@ -84,50 +103,80 @@ def write_csv(rows: list[dict], run_at: datetime) -> Path:
     return filename
 
 
-def fmt_rp(amount: int) -> str:
-    return 'Rp ' + f'{amount:,}'.replace(',', '.')
+def fmt_rp(amount) -> str:
+    return 'Rp ' + f'{int(amount):,}'.replace(',', '.')
 
 
 def print_separator(char='─', width=68):
     print('  ' + char * width)
 
 
-def main():
-    parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument('--dry-run', action='store_true',
-                        help='Preview saja, tidak tulis ke Odoo')
-    parser.add_argument('--product', metavar='NAMA',
-                        help='Filter nama produk (substring, tidak case-sensitive)')
-    parser.add_argument('--id', dest='ids', metavar='ID', nargs='+', type=int,
-                        help='Filter by ID produk (bisa lebih dari satu)')
-    args = parser.parse_args()
-    dry_run = args.dry_run
-    run_at = datetime.now()
-
-    print()
-    print('=' * 72)
-    label = '  [DRY-RUN — tidak ada yang ditulis ke Odoo]' if dry_run else ''
-    print(f'    KODE MODAL DECODER  |  Chipper ABCDEFGHIY{label}')
-    print('=' * 72)
-
-    cfg = load_config()
-    url, db, username, password = cfg['url'], cfg['db'], cfg['username'], cfg['password']
-
-    print(f'\n  Odoo : {url}')
-    print(f'  DB   : {db}')
-    print(f'  User : {username}')
-    print('\n  Menghubungkan...', end=' ', flush=True)
-    uid, models = connect_odoo(url, db, username, password)
-    print(f'OK  (uid={uid})')
-
+def cmd_check(models, db, uid, password, args, run_at):
+    """Laporan produk dengan harga modal dan harga jual keduanya kosong."""
     filter_info = ''
     if args.product:
         filter_info += f'  nama mengandung "{args.product}"'
     if args.ids:
         filter_info += ('  |' if filter_info else '') + f'  ID: {args.ids}'
+
+    print('\n  Mencari produk dengan harga modal & harga jual kosong...')
+    if filter_info:
+        print(f'  Filter:{filter_info}')
+
+    try:
+        products = fetch_empty_prices(models, db, uid, password,
+                                      name_filter=args.product, id_filter=args.ids)
+    except Exception as e:
+        print(f'\n[ERROR] Gagal mengambil data: {e}')
+        sys.exit(1)
+
+    if not products:
+        print('\n  Tidak ada produk dengan kedua harga kosong.')
+        return
+
+    ts = run_at.strftime('%Y-%m-%d %H:%M:%S')
+    print()
+    print_separator()
+    print(f'  PRODUK HARGA KOSONG ({len(products)} produk):')
+    print_separator()
+    print(f"  {'No':<4} {'ID':<6} {'Nama Produk':<36} {'Kode Modal':<14} Modal   Jual")
+    print_separator(char='·')
+
+    rows = []
+    for i, p in enumerate(products, 1):
+        kode = p['kode_modal'] or '-'
+        modal = fmt_rp(p['standard_price'])
+        jual = fmt_rp(p['list_price'])
+        print(f"  {i:<4} {p['id']:<6} {p['name'][:36]:<36} {kode:<14} {modal:<9} {jual}")
+        rows.append({
+            'waktu': ts,
+            'id_produk': p['id'],
+            'nama_produk': p['name'],
+            'kode_modal': kode,
+            'harga_modal': p['standard_price'],
+            'harga_jual': p['list_price'],
+        })
+
+    print_separator()
+
+    csv_path = write_csv(rows, run_at, suffix='check')
+    print(f'\n  Log disimpan: {csv_path}')
+    print()
+    print('=' * 72)
+
+
+def cmd_fill(models, db, uid, password, args, run_at):
+    """Isi standard_price dari kode_modal menggunakan chipper ABCDEFGHIY."""
+    filter_info = ''
+    if args.product:
+        filter_info += f'  nama mengandung "{args.product}"'
+    if args.ids:
+        filter_info += ('  |' if filter_info else '') + f'  ID: {args.ids}'
+
     print('\n  Mencari produk dengan kode_modal terisi & modal/cost kosong...')
     if filter_info:
         print(f'  Filter:{filter_info}')
+
     try:
         candidates = fetch_candidates(models, db, uid, password,
                                       name_filter=args.product, id_filter=args.ids)
@@ -204,7 +253,7 @@ def main():
         print(f"  {i:<4} {p['name'][:36]:<36} {p['kode_modal']:<14} {fmt_rp(p['cost'])}")
     print_separator()
 
-    if dry_run:
+    if args.dry_run:
         for r in log_rows:
             if r['status'] == 'PENDING':
                 r['status'] = 'DRY-RUN'
@@ -230,7 +279,6 @@ def main():
 
     for p in to_update:
         try:
-            # Tulis ke product.product agar propagate ke semua varian
             models.execute_kw(
                 db, uid, password,
                 'product.product', 'write',
@@ -254,6 +302,44 @@ def main():
     print(f', {failed} gagal' if failed else '')
     print(f'  Log disimpan: {csv_path}')
     print('=' * 72)
+
+
+def main():
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument('--check', action='store_true',
+                        help='Cek produk dengan harga modal & harga jual kosong')
+    parser.add_argument('--dry-run', action='store_true',
+                        help='Preview saja, tidak tulis ke Odoo')
+    parser.add_argument('--product', metavar='NAMA',
+                        help='Filter nama produk (substring, tidak case-sensitive)')
+    parser.add_argument('--id', dest='ids', metavar='ID', nargs='+', type=int,
+                        help='Filter by ID produk (bisa lebih dari satu)')
+    args = parser.parse_args()
+    run_at = datetime.now()
+
+    print()
+    print('=' * 72)
+    if args.check:
+        print('    KODE MODAL DECODER  |  Cek Harga Kosong')
+    else:
+        label = '  [DRY-RUN — tidak ada yang ditulis ke Odoo]' if args.dry_run else ''
+        print(f'    KODE MODAL DECODER  |  Chipper ABCDEFGHIY{label}')
+    print('=' * 72)
+
+    cfg = load_config()
+    url, db, username, password = cfg['url'], cfg['db'], cfg['username'], cfg['password']
+
+    print(f'\n  Odoo : {url}')
+    print(f'  DB   : {db}')
+    print(f'  User : {username}')
+    print('\n  Menghubungkan...', end=' ', flush=True)
+    uid, models = connect_odoo(url, db, username, password)
+    print(f'OK  (uid={uid})')
+
+    if args.check:
+        cmd_check(models, db, uid, password, args, run_at)
+    else:
+        cmd_fill(models, db, uid, password, args, run_at)
 
 
 if __name__ == '__main__':
