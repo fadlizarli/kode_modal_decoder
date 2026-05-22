@@ -15,16 +15,21 @@ Penggunaan (langsung via flag):
   python3 main.py --from-csv file.csv --dry-run
   python3 main.py --export               # export produk ke CSV
   python3 main.py --stats                # statistik produk
+  python3 main.py --dupes                # cek produk duplikat/sangat mirip
+  python3 main.py --dupes --threshold 0.85
 """
 
+import re
 import sys
 import csv
+import difflib
 import argparse
 import configparser
 import xmlrpc.client
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
+from collections import defaultdict
 from decoder import decode, is_abcdefghiy
 
 LOGS_DIR = Path('logs')
@@ -136,6 +141,56 @@ def fetch_stats(models, db, uid, password) -> dict:
             '|', ['list_price', '=', 0], ['list_price', '=', 1],
         ]),
     }
+
+# ─── Duplikat helpers ───────────────────────────────────────────────────────
+
+
+def _normalize_name(name: str) -> str:
+    return re.sub(r'\s+', ' ', name.strip().lower())
+
+
+def find_duplicates(products: list[dict], threshold: float = 0.82):
+    """
+    Kelompokkan duplikat persis dan temukan pasang sangat mirip.
+
+    Returns:
+      exact_groups  — list of list[dict], tiap grup nama yang sama persis (>1 produk)
+      similar_pairs — list of (p1, p2, score), pasang dengan ratio >= threshold
+    """
+    groups: dict[str, list] = defaultdict(list)
+    for p in products:
+        groups[_normalize_name(p['name'])].append(p)
+
+    exact_groups = [v for v in groups.values() if len(v) > 1]
+    exact_keys   = {_normalize_name(p['name']) for g in exact_groups for p in g}
+
+    # Produk unik (tidak masuk duplikat persis)
+    unique = {key: group[0] for key, group in groups.items()
+              if len(group) == 1 and key not in exact_keys}
+
+    # Pre-filter via word-bucket: hanya bandingkan pasang yang berbagi kata (≥3 huruf)
+    word_buckets: dict[str, set] = defaultdict(set)
+    for key in unique:
+        for word in key.split():
+            if len(word) >= 3:
+                word_buckets[word].add(key)
+
+    candidate_pairs: set[tuple] = set()
+    for keys in word_buckets.values():
+        keys_list = sorted(keys)
+        for i in range(len(keys_list)):
+            for j in range(i + 1, len(keys_list)):
+                candidate_pairs.add((keys_list[i], keys_list[j]))
+
+    similar_pairs = []
+    for a, b in candidate_pairs:
+        ratio = difflib.SequenceMatcher(None, a, b).ratio()
+        if ratio >= threshold:
+            similar_pairs.append((unique[a], unique[b], ratio))
+
+    similar_pairs.sort(key=lambda x: x[2], reverse=True)
+    return exact_groups, similar_pairs
+
 
 # ─── CSV helpers ────────────────────────────────────────────────────────────
 
@@ -565,6 +620,80 @@ def cmd_stats(models, db, uid, password, run_at):
     print(f"  {'Harga belum lengkap (modal/jual 0 atau 1)':<40}: {s['harga_belum_lengkap']:>6}")
     print_separator()
 
+def cmd_dupes(models, db, uid, password, args, run_at):
+    threshold   = getattr(args, 'threshold', 0.82)
+    name_filter = getattr(args, 'product', None)
+
+    filter_info = f'  Filter nama: "{name_filter}"' if name_filter else '  Semua produk'
+    print(f'\n  Mengambil produk... ({filter_info.strip()})')
+    try:
+        products = fetch_all_products(models, db, uid, password, name_filter=name_filter)
+    except Exception as e:
+        print(f'\n[ERROR] {e}')
+        return
+
+    if not products:
+        print('\n  Tidak ada produk ditemukan.')
+        return
+
+    print(f'  {len(products)} produk dimuat. Menganalisis duplikat...')
+    exact_groups, similar_pairs = find_duplicates(products, threshold=threshold)
+
+    if not exact_groups and not similar_pairs:
+        print('\n  Tidak ada duplikat atau produk sangat mirip ditemukan.')
+        return
+
+    ts       = run_at.strftime('%Y-%m-%d %H:%M:%S')
+    log_rows = []
+    grup_num = 0
+
+    if exact_groups:
+        print()
+        print_separator()
+        total_exact = sum(len(g) for g in exact_groups)
+        print(f'  DUPLIKAT PERSIS ({len(exact_groups)} grup, {total_exact} produk):')
+        print_separator()
+        for group in exact_groups:
+            grup_num += 1
+            print(f'\n  Grup {grup_num}: "{group[0]["name"]}" ({len(group)} produk)')
+            print(f"  {'ID':<6} {'Kode Modal':<16} {'Modal':<13} Jual")
+            print_separator(char='·')
+            for p in group:
+                kode = p.get('kode_modal') or '-'
+                print(f"  {p['id']:<6} {kode:<16} {fmt_rp(p['standard_price']):<13} {fmt_rp(p['list_price'])}")
+                log_rows.append({
+                    'tipe': 'Duplikat Persis', 'grup': grup_num,
+                    'id_produk': p['id'], 'nama_produk': p['name'],
+                    'kode_modal': kode, 'harga_modal': p['standard_price'],
+                    'harga_jual': p['list_price'], 'skor_kemiripan': '1.00',
+                })
+        print_separator()
+
+    if similar_pairs:
+        print()
+        print_separator()
+        print(f'  SANGAT MIRIP ({len(similar_pairs)} pasang, threshold={threshold:.0%}):')
+        print_separator()
+        print(f"  {'No':<4} {'Skor':<6} {'ID1':<6} {'Nama 1':<30} {'ID2':<6} Nama 2")
+        print_separator(char='·')
+        for i, (p1, p2, score) in enumerate(similar_pairs, 1):
+            grup_num += 1
+            print(f"  {i:<4} {score:.2f}  {p1['id']:<6} {p1['name'][:30]:<30} {p2['id']:<6} {p2['name'][:30]}")
+            for p in (p1, p2):
+                kode = p.get('kode_modal') or '-'
+                log_rows.append({
+                    'tipe': 'Sangat Mirip', 'grup': grup_num,
+                    'id_produk': p['id'], 'nama_produk': p['name'],
+                    'kode_modal': kode, 'harga_modal': p['standard_price'],
+                    'harga_jual': p['list_price'], 'skor_kemiripan': f'{score:.2f}',
+                })
+        print_separator()
+
+    if log_rows:
+        csv_path = write_csv(log_rows, run_at, suffix='dupes')
+        print(f'\n  Log disimpan: {csv_path}')
+
+
 # ─── Menu interaktif ─────────────────────────────────────────────────────────
 
 
@@ -618,6 +747,7 @@ def show_menu(models, db, uid, password, url, db_name, username):
         print('  [3] Import harga dari CSV')
         print('  [4] Export produk ke CSV')
         print('  [5] Statistik produk')
+        print('  [6] Cek produk duplikat / sangat mirip')
         print('  [0] Keluar')
         print_separator()
 
@@ -675,6 +805,18 @@ def show_menu(models, db, uid, password, url, db_name, username):
             _header('Statistik Produk')
             cmd_stats(models, db, uid, password, run_at)
 
+        elif choice == '6':
+            _header('Cek Produk Duplikat / Sangat Mirip')
+            name_filter, _ = _ask_filter()
+            raw_thr = _ask('Threshold kemiripan [0.70-1.00, default=0.82]: ', '0.82')
+            try:
+                threshold = float(raw_thr)
+                threshold = max(0.50, min(1.00, threshold))
+            except ValueError:
+                threshold = 0.82
+            args = SimpleNamespace(product=name_filter, threshold=threshold)
+            cmd_dupes(models, db, uid, password, args, run_at)
+
         else:
             print('\n  Pilihan tidak valid.')
             continue
@@ -690,14 +832,16 @@ def show_menu(models, db, uid, password, url, db_name, username):
 
 def main():
     parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument('--fill',     action='store_true')
-    parser.add_argument('--check',    action='store_true')
-    parser.add_argument('--stats',    action='store_true')
-    parser.add_argument('--export',   action='store_true')
-    parser.add_argument('--from-csv', metavar='FILE')
-    parser.add_argument('--dry-run',  action='store_true')
-    parser.add_argument('--product',  metavar='NAMA')
-    parser.add_argument('--id',       dest='ids', metavar='ID', nargs='+', type=int)
+    parser.add_argument('--fill',      action='store_true')
+    parser.add_argument('--check',     action='store_true')
+    parser.add_argument('--stats',     action='store_true')
+    parser.add_argument('--export',    action='store_true')
+    parser.add_argument('--dupes',     action='store_true')
+    parser.add_argument('--threshold', type=float, default=0.82, metavar='N')
+    parser.add_argument('--from-csv',  metavar='FILE')
+    parser.add_argument('--dry-run',   action='store_true')
+    parser.add_argument('--product',   metavar='NAMA')
+    parser.add_argument('--id',        dest='ids', metavar='ID', nargs='+', type=int)
     args = parser.parse_args()
     run_at = datetime.now()
 
@@ -706,7 +850,7 @@ def main():
 
     # Tentukan mode: CLI langsung atau menu
     is_direct = any([args.fill, args.check, args.stats, args.export,
-                     args.from_csv, args.dry_run, args.product, args.ids])
+                     args.dupes, args.from_csv, args.dry_run, args.product, args.ids])
 
     if not is_direct:
         # Mode menu — koneksi dulu, baru tampilkan menu
@@ -732,6 +876,8 @@ def main():
         _header('Statistik Produk')
     elif args.export:
         _header('Export Produk ke CSV')
+    elif args.dupes:
+        _header('Cek Produk Duplikat / Sangat Mirip')
     else:
         _header('Chipper ABCDEFGHIY', dry_run=args.dry_run)
 
@@ -751,6 +897,8 @@ def main():
     elif args.export:
         args.empty_only = False
         cmd_export(models, db, uid, password, args, run_at)
+    elif args.dupes:
+        cmd_dupes(models, db, uid, password, args, run_at)
     else:
         cmd_fill(models, db, uid, password, args, run_at)
 

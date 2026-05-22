@@ -1,6 +1,6 @@
 # Kode Modal Decoder
 
-Aplikasi terminal Python untuk mengelola harga produk di Odoo — mengisi `standard_price` dari `kode_modal` (chipper ABCDEFGHIY), mengecek produk yang belum ada harganya, mengupdate harga dari file CSV, mengekspor produk ke CSV, dan melihat statistik produk.
+Aplikasi terminal Python untuk mengelola harga produk di Odoo — mengisi `standard_price` dari `kode_modal` (chipper ABCDEFGHIY), mengecek produk yang belum ada harganya, mengupdate harga dari file CSV, mengekspor produk ke CSV, melihat statistik produk, dan mendeteksi produk duplikat atau sangat mirip.
 
 ---
 
@@ -85,6 +85,7 @@ python3 main.py
   [3] Import harga dari CSV
   [4] Export produk ke CSV
   [5] Statistik produk
+  [6] Cek produk duplikat / sangat mirip
   [0] Keluar
 
   Pilih:
@@ -243,6 +244,69 @@ python3 main.py --stats
 
 ---
 
+### 6. Cek produk duplikat / sangat mirip
+
+Mendeteksi produk dengan nama **persis sama** (duplikat) maupun **sangat mirip** (nama hampir identik, berguna menemukan salah ketik atau variasi nama).
+
+```bash
+# Semua produk, threshold default 82%
+python3 main.py --dupes
+
+# Threshold kemiripan kustom (0.0 – 1.0)
+python3 main.py --dupes --threshold 0.90
+
+# Filter nama produk
+python3 main.py --dupes --product "Sepatu"
+```
+
+Output dibagi dua bagian:
+- **Duplikat Persis** — nama identik (case-insensitive), dikelompokkan per grup
+- **Sangat Mirip** — pasang nama dengan skor kemiripan ≥ threshold, diurutkan dari paling mirip
+
+```
+========================================================================
+    KODE MODAL DECODER  |  Cek Produk Duplikat / Sangat Mirip
+========================================================================
+
+  250 produk dimuat. Menganalisis duplikat...
+
+  ──────────────────────────────────────────────────────────────────────
+  DUPLIKAT PERSIS (1 grup, 2 produk):
+  ──────────────────────────────────────────────────────────────────────
+
+  Grup 1: "Sepatu Nike Air Max" (2 produk)
+  ID     Kode Modal       Modal         Jual
+  ················································
+  12     BEY RT           Rp 25.000     Rp 150.000
+  45     -                Rp 0          Rp 0
+  ──────────────────────────────────────────────────────────────────────
+
+  SANGAT MIRIP (2 pasang, threshold=82%):
+  ──────────────────────────────────────────────────────────────────────
+  No   Skor   ID1    Nama 1                          ID2    Nama 2
+  ··································································
+  1    0.94   33     Kemeja Flannel Kotak            78     Kemeja Flanel Kotak
+  2    0.86   55     Celana Cargo Panjang            99     Celana Kargo Panjang
+  ──────────────────────────────────────────────────────────────────────
+
+  Log disimpan: logs/20260521_100003_dupes.csv
+```
+
+**Kolom log duplikat:**
+
+| Kolom | Keterangan |
+|---|---|
+| `tipe` | `Duplikat Persis` / `Sangat Mirip` |
+| `grup` | Nomor grup (pasang produk yang terhubung) |
+| `id_produk` | ID `product.template` di Odoo |
+| `nama_produk` | Nama produk |
+| `kode_modal` | Kode modal (`-` jika kosong) |
+| `harga_modal` | Nilai `standard_price` saat ini |
+| `harga_jual` | Nilai `list_price` saat ini |
+| `skor_kemiripan` | `1.00` untuk duplikat persis, desimal untuk sangat mirip |
+
+---
+
 ## Contoh Output Terminal
 
 **Mode isi modal/cost (`--fill --dry-run`)**
@@ -346,6 +410,7 @@ Setiap run otomatis menyimpan log ke folder `logs/`.
 | `logs/YYYYMMDD_HHMMSS_check.csv` | Setiap run `--check` |
 | `logs/YYYYMMDD_HHMMSS_import.csv` | Setiap run `--from-csv` |
 | `logs/YYYYMMDD_HHMMSS_export.csv` | Setiap run `--export` |
+| `logs/YYYYMMDD_HHMMSS_dupes.csv` | Setiap run `--dupes` |
 
 **Kolom log isi modal/cost:**
 
