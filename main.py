@@ -146,7 +146,22 @@ def fetch_stats(models, db, uid, password) -> dict:
 
 
 def _normalize_name(name: str) -> str:
+    """Lowercase + collapse whitespace — dipakai untuk exact grouping."""
     return re.sub(r'\s+', ' ', name.strip().lower())
+
+
+def _normalize_for_compare(name: str) -> str:
+    """
+    Normalisasi untuk perbandingan kemiripan:
+    - lowercase + strip
+    - satukan format dimensi: "275 x 17" / "275 X 17" → "275x17"
+    - sort token alfabetis (token-sort, order-independent)
+    """
+    s = name.strip().lower()
+    # "275 x 17" / "2.75 X 17" / "275×17" → "275x17"
+    s = re.sub(r'(\d+(?:[.,]\d+)?)\s*[xX×]\s*(\d+(?:[.,]\d+)?)', r'\1x\2', s)
+    s = re.sub(r'\s+', ' ', s)
+    return ' '.join(sorted(s.split()))
 
 
 def find_duplicates(products: list[dict], threshold: float = 0.82):
@@ -168,12 +183,13 @@ def find_duplicates(products: list[dict], threshold: float = 0.82):
     unique = {key: group[0] for key, group in groups.items()
               if len(group) == 1 and key not in exact_keys}
 
-    # Pre-filter via word-bucket: hanya bandingkan pasang yang berbagi kata (≥3 huruf)
+    # Word-bucket pakai token dari _normalize_for_compare
+    # agar "275 x 17" dan "275x17" masuk bucket yang sama ("275x17")
     word_buckets: dict[str, set] = defaultdict(set)
-    for key in unique:
-        for word in key.split():
+    for orig_key, p in unique.items():
+        for word in _normalize_for_compare(p['name']).split():
             if len(word) >= 3:
-                word_buckets[word].add(key)
+                word_buckets[word].add(orig_key)
 
     candidate_pairs: set[tuple] = set()
     for keys in word_buckets.values():
@@ -182,9 +198,12 @@ def find_duplicates(products: list[dict], threshold: float = 0.82):
             for j in range(i + 1, len(keys_list)):
                 candidate_pairs.add((keys_list[i], keys_list[j]))
 
+    # Bandingkan pakai token-sorted normalized form
     similar_pairs = []
     for a, b in candidate_pairs:
-        ratio = difflib.SequenceMatcher(None, a, b).ratio()
+        na = _normalize_for_compare(unique[a]['name'])
+        nb = _normalize_for_compare(unique[b]['name'])
+        ratio = difflib.SequenceMatcher(None, na, nb).ratio()
         if ratio >= threshold:
             similar_pairs.append((unique[a], unique[b], ratio))
 
